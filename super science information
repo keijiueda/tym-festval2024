@@ -1,0 +1,110 @@
+import network
+import socket
+import time
+from machine import Pin, PWM
+
+# モーター制御の設定
+AIN1 = Pin(14, Pin.OUT)
+AIN2 = Pin(15, Pin.OUT)
+PWMA = PWM(Pin(13))
+STBY = Pin(16, Pin.OUT)  # STBYピンをGPIO16に設定
+PWMA.freq(1000)  # PWM周波数を1kHzに設定
+
+# モーターを動作させる前に、STBYピンをHIGHに設定
+STBY.value(1)  # STBYを有効にする
+
+# 現在の速度を保存する変数
+current_speed = 32767  # 初期値として32767（約50%の速度）を設定
+
+def web_page(current_speed):
+    html = f"""<html>
+                <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1">
+                </head>
+                <body>
+                    <h1>Motor Control</h1>
+                    <form action="/" method="GET">
+                        <label for="speed">Set Speed (0-65535): </label>
+                        <input type="number" id="speed" name="speed" min="0" max="65535" value="{current_speed}">
+                        <input type="submit" value="Set Speed">
+                    </form>
+                    <p><a href="/?action=forward&speed={current_speed}">Forward</a></p>
+                    <p><a href="/?action=backward&speed={current_speed}">Backward</a></p>
+                    <p><a href="/?action=stop">Stop</a></p>
+                </body>
+              </html>"""
+    return html
+
+def motor_forward(speed):
+    """モーターを前進させる"""
+    AIN1.value(1)
+    AIN2.value(0)
+    PWMA.duty_u16(speed)
+
+def motor_backward(speed):
+    """モーターを後退させる"""
+    AIN1.value(0)
+    AIN2.value(1)
+    PWMA.duty_u16(speed)
+
+def motor_stop():
+    """モーターを停止させる"""
+    AIN1.value(0)
+    AIN2.value(0)
+    PWMA.duty_u16(0)
+
+def ap_mode(ssid, password):
+    # アクセスポイントを初期化
+    ap = network.WLAN(network.AP_IF)
+    ap.config(essid=ssid, password=password)
+    ap.active(True)
+    
+    while not ap.active():
+        time.sleep(1)
+    
+    print('AP Mode Is Active, You can Now Connect')
+    print('IP Address To Connect to: ' + ap.ifconfig()[0])
+    
+    # ソケットサーバーの設定
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('', 80))
+    s.listen(5)
+
+    global current_speed  # current_speed変数をグローバルで使用する
+
+    while True:
+        try:
+            conn, addr = s.accept()
+            print('Got a connection from %s' % str(addr))
+            request = conn.recv(1024)
+            request = str(request)
+            print('Content = %s' % request)
+
+            # リクエストから速度を取得
+            if "speed=" in request:
+                try:
+                    speed_str = request.split("speed=")[1].split(" ")[0]
+                    current_speed = int(speed_str)
+                    current_speed = max(0, min(65535, current_speed))  # 0-65535の範囲に制限
+                except:
+                    pass
+
+            # モーター制御のリクエスト処理
+            if '/?action=forward' in request:
+                motor_forward(current_speed)
+            elif '/?action=backward' in request:
+                motor_backward(current_speed)
+            elif '/?action=stop' in request:
+                motor_stop()
+
+            # HTMLレスポンスを送信
+            response = web_page(current_speed)
+            conn.send('HTTP/1.1 200 OK\nContent-Type: text/html\n\n')
+            conn.send(response)
+        except Exception as e:
+            print('Error:', e)
+        finally:
+            conn.close()
+
+# SSIDとパスワードを設定
+ap_mode('memejyo-', 'anayanayanaya')
